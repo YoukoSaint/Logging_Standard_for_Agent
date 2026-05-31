@@ -1,0 +1,17 @@
+# OptoSync — 仅作参考，不纳入管理
+OptoSync/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
