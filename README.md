@@ -8,12 +8,31 @@
 
 规范基于 [OptoSync](https://github.com/YoukoSaint/OptoSync) 项目的日志实践提炼而成，结合运维思维做举一反三。
 
+## 快速安装
+
+### 方式一：Claude Code Skill（推荐）
+
+```bash
+# 安装为全局 skill（所有项目可用）
+cp SKILL.md ~/.claude/skills/agent-logging-standard/SKILL.md
+```
+
+安装后在 Claude Code 中输入 `/agent-logging-standard` 即可调用。
+
+### 方式二：直接引用
+
+```bash
+# 喂给 Agent 作为知识库
+请遵循 AGENT_LOGGING_STANDARD_zh.md 中的日志规范，为以下模块编写代码……
+```
+
 ## 文件说明
 
-| 文件 | 语言 | 说明 |
-|------|------|------|
-| `AGENT_LOGGING_STANDARD.md` | 英文 | 完整规范：级别定义、结构化模式、运维模式、错误处理、安全合规、反模式 |
-| `AGENT_LOGGING_STANDARD_zh.md` | 中文 | 同上，追加级别决策速查表和日志格式字段说明 |
+| 文件 | 类型 | 语言 | 说明 |
+|------|------|------|------|
+| `SKILL.md` | Claude Code Skill | EN | 可直接安装到 `~/.claude/skills/`，Agent 激活后自动执行 |
+| `AGENT_LOGGING_STANDARD.md` | 参考文档 | EN | 完整规范：级别定义、结构化模式、运维模式、错误处理、安全合规、反模式 |
+| `AGENT_LOGGING_STANDARD_zh.md` | 参考文档 | 中文 | 同上，追加级别决策速查表和日志格式字段说明 |
 
 ## 规范概要
 
@@ -32,18 +51,23 @@ CRITICAL → 系统崩溃（OOM、磁盘满、安全入侵，必须含恢复建�
 - **热路径克制** — >100 Hz 的循环内不打日志，高频事件用取模采样
 - **安全红线** — 密码、令牌、PII 绝不写入日志
 
-### 用法
+### 10 项 Agent 检查清单
 
-将规范文件直接喂给 Agent 作为 system prompt 或知识库文档：
-
-```
-请遵循 AGENT_LOGGING_STANDARD_zh.md 中的日志规范，为以下模块编写代码……
-```
+- ✅ `setup_logging()` 在入口点调用，使用时间戳文件
+- ✅ 文件 Handler = DEBUG，控制台 Handler = INFO
+- ✅ 每个模块 `logging.getLogger(__name__)`
+- ✅ 长运行操作记录 START/STOP + 指标
+- ✅ except 块中使用 `logger.exception()`
+- ✅ 量化日志带单位（Hz、MB、ms、%）
+- ✅ 不在 >100 Hz 循环内打日志
+- ✅ 使用 `%s` 格式化而非 f-string
+- ✅ 绝不记录密码/令牌/PII
+- ✅ 守护进程添加健康监控
 
 ## 参考来源
 
 - [OptoSync](https://github.com/YoukoSaint/OptoSync) — 多设备同步采集系统（Keithley 2461 + Ideaoptics 光谱仪）
-- 核心分析文件：`core/logging_config.py`、`core/sync_controller.py`、`core/health_monitor.py`、`drivers/keithley_driver.py`
+- 核心参考文件：`core/logging_config.py`、`core/sync_controller.py`、`core/health_monitor.py`、`drivers/keithley_driver.py`
 
 ## 许可
 
