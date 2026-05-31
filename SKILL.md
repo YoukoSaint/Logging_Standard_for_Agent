@@ -203,7 +203,7 @@ logger.debug("API key: %s...", api_key[:8])
 logger.info("User authenticated: %s", username)  # non-sensitive identifier only
 ```
 
-## 9. Audit Trail (optional but recommended for multi-user systems)
+## 9. Audit Trail (optional, useful for multi-user systems)
 
 ```python
 audit = logging.getLogger("audit")

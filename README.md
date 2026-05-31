@@ -1,6 +1,6 @@
 # Agent Logging Standard
 
-> 面向 AI 编码 Agent 的生产级日志编程规范，萃取自真实硬件采集项目的最佳实践。
+> 面向 AI 编码 Agent 的生产级日志编程规范，萃取自真实硬件采集项目。
 
 ## 项目简介
 
@@ -10,7 +10,7 @@
 
 ## 快速安装
 
-### 方式一：Claude Code Skill（推荐）
+### 方式一：Claude Code Skill
 
 ```bash
 # 安装为全局 skill（所有项目可用）
