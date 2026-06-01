@@ -31,13 +31,13 @@ cp SKILL.md ~/.claude/skills/agent-logging-standard/SKILL.md
 | 文件 | 类型 | 语言 | 说明 |
 |------|------|------|------|
 | `SKILL.md` | Claude Code Skill | EN | 可直接安装到 `~/.claude/skills/`，Agent 激活后自动执行 |
-| `AGENT_LOGGING_STANDARD.md` | 参考文档 | EN | 完整规范：级别定义、结构化模式、运维模式、错误处理、安全合规、反模式 |
-| `AGENT_LOGGING_STANDARD_zh.md` | 参考文档 | 中文 | 同上，追加级别决策速查表和日志格式字段说明 |
+| `AGENT_LOGGING_STANDARD.md` | 参考文档 | EN | 完整规范：级别定义、结构化模式、运维模式、错误处理、安全合规、反模式 + 仪器自动化传输层日志 |
+| `AGENT_LOGGING_STANDARD_zh.md` | 参考文档 | 中文 | 同上，追加级别决策速查表、日志格式字段说明和仪器自动化传输层日志章节 |
 
 ## 规范概要
 
 ```
-DEBUG   → 开发诊断（协议细节、变量值、函数进出）
+DEBUG   → 开发诊断（协议细节、变量值、函数进出、传输层原始字节）
 INFO    → 运行事件（启动/停止、配置变更、操作完成，必须带指标）
 WARNING → 可恢复异常（自动降级、重试、资源趋近上限）
 ERROR   → 操作失败（请求失败、数据损坏、外部服务不通，含堆栈）
@@ -50,8 +50,11 @@ CRITICAL → 系统崩溃（OOM、磁盘满、安全入侵，必须含恢复建�
 - **时间戳文件** — 每次运行生成 `AppName_YYYYMMDD_HHMMSS.log`，互不污染
 - **热路径克制** — >100 Hz 的循环内不打日志，高频事件用取模采样
 - **安全红线** — 密码、令牌、PII 绝不写入日志
+- **传输层标记** — USB/TCP/Serial/GPIB 通信日志带 `[transport=xxx][addr=xxx]` 标签
+- **连接生命周期** — 连接/断开/重连事件全链路记录，含传输层指标
+- **发现日志** — 仪器自动发现阶段每条传输通道的扫描结果（含负结果）
 
-### 10 项 Agent 检查清单
+### 10 项 Agent 检查清单（+ 3 项仪器自动化补充）
 
 - ✅ `setup_logging()` 在入口点调用，使用时间戳文件
 - ✅ 文件 Handler = DEBUG，控制台 Handler = INFO
@@ -63,6 +66,9 @@ CRITICAL → 系统崩溃（OOM、磁盘满、安全入侵，必须含恢复建�
 - ✅ 使用 `%s` 格式化而非 f-string
 - ✅ 绝不记录密码/令牌/PII
 - ✅ 守护进程添加健康监控
+- ✅ 仪器日志标注传输层来源 `[transport=xxx][addr=xxx]`
+- ✅ 独立子 Logger 分离 SCPI 协议日志与传输层日志
+- ✅ 发现阶段记录每条传输通道的扫描结果
 
 ## 参考来源
 

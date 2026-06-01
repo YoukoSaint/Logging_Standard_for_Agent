@@ -25,6 +25,8 @@ Activate for:
 - Log level selection (DEBUG / INFO / WARNING / ERROR / CRITICAL)
 - Structured log formats, health monitoring, error handling patterns
 - Security boundaries (never log secrets)
+- Instrument transport layer tagging and lifecycle tracking
+- Protocol/transport layer separation (SCPI vs TCP/UART)
 
 Do NOT use as primary source for:
 - Tracing/metrics SDKs (OpenTelemetry, Prometheus) — see `dashboard-builder`
@@ -226,6 +228,62 @@ Separate logger → separate file → immutable history.
 - [ ] No passwords, tokens, or PII in any log
 - [ ] Health monitoring added for daemon processes
 - [ ] Consistent prefixes for grep (HEALTH |, ALERT |, AUDIT |)
+
+
+
+## 11. Instrument Automation Transport Layer
+
+For multi-device automation where instruments communicate over USB, Ethernet/IP,
+Serial, or GPIB. Every log line must identify **how** a device was talked to.
+
+### Transport Tagging
+```python
+# ALWAYS tag instrument communication with [transport=xxx][addr=xxx]
+logger.info("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] Connected")
+logger.error("[transport=tcp][addr=192.168.1.100:5025] Command timeout")
+logger.warning("[transport=serial][addr=COM3@115200] Buffer overflow")
+```
+
+### Connection Lifecycle
+```python
+# INFO: connect/disconnect/reconnect
+logger.info("[transport=tcp][addr=192.168.1.100:5025] "
+            "Reconnected: was down for 12.3s (3 attempts)")
+
+# WARNING: unexpected disconnection
+logger.warning("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+               "Connection lost: device removed from bus")
+```
+
+### Health Metrics
+```python
+# Add per-transport metrics to every HEALTH line
+log.info("HEALTH | tcp:lat=%.1fms|retx=%d | usb:tx=%dKB/s|err=%d",
+         tcp_lat, tcp_retx, usb_kbps, usb_err)
+```
+
+### Protocol/Transport Separation
+```python
+logger = logging.getLogger("controller")
+scpi_log = logging.getLogger("controller.scpi")      # SCPI commands
+transport_log = logging.getLogger("controller.transport")  # raw bytes
+```
+
+### Discovery Logging
+```python
+# Log every transport scanned, including negatives
+logger.info("[discover][tcp] Probing 192.168.1.0/24:5025...")
+logger.warning("[discover][tcp] No devices found (timeout=5s)")
+```
+
+## Agent Checklist Additions (instrument automation)
+
+- [ ] Every instrument log line tagged with `[transport=xxx][addr=xxx]`
+- [ ] Connection/disconnection logged at INFO with address
+- [ ] HEALTH line includes per-transport metrics
+- [ ] SCPI and transport layers use separate child loggers
+- [ ] Discovery logs every scanned transport (including empty results)
+- [ ] Error messages include actionable recovery hints per transport type
 
 ## Anti-Patterns Quick Reference
 

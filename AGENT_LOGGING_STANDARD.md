@@ -641,6 +641,244 @@ logger.info("User authenticated: %s", username)  # GOOD
 
 ---
 
+
+
+---
+
+## 14. Instrument Automation Transport Layer
+
+> For multi-device automation systems where instruments communicate over heterogeneous
+> transports (USB, Ethernet/IP, Serial, GPIB). Every log line must identify **how** a
+> device was talked to, because the failure mode and debugging path differ by transport.
+
+### 14.1 Transport Tagging (MANDATORY)
+
+Every log line involving instrument communication MUST include a transport tag:
+
+```python
+logger.info("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] Connected")
+logger.error("[transport=tcp][addr=192.168.1.100:5025] Command timeout after 5s")
+logger.warning("[transport=serial][addr=COM3@115200] Buffer overflow, purging")
+```
+
+**Tag format:**
+
+| Transport | Tag | Address Format |
+|-----------|-----|----------------|
+| USB (USBTMC/VISA) | `transport=usb` | `USB0::VID::PID::serial::INSTR` |
+| TCP/IP (VXI-11, Raw Socket) | `transport=tcp` | `host:port` |
+| Serial / RS-232 | `transport=serial` | `port@baud` |
+| GPIB | `transport=gpib` | `GPIB0::pad` |
+| Unknown / auto-discovered | `transport=auto` | Include discovery method |
+
+**Rules:**
+- Always use `[transport=xxx][addr=yyy]` as the first two fields after the log level
+- Keep the address format consistent so `grep addr=` works across the codebase
+- When an instrument is reachable via multiple paths (e.g., USB and TCP), tag the active one
+
+---
+
+### 14.2 Connection Lifecycle
+
+Every connection, disconnection, and reconnection MUST be logged at **INFO** level:
+
+```python
+# Connect
+logger.info("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+            "Connected: idn='Keithley 2450, 4430138, v3.0'")
+
+# Disconnect (expected)
+logger.info("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+            "Disconnected: user-initiated close")
+
+# Disconnect (unexpected - USB hot-plug / cable pull)
+logger.warning("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+               "Connection lost: device removed from bus")
+
+# Auto-reconnect
+logger.info("[transport=tcp][addr=192.168.1.100:5025] "
+            "Reconnected: was down for 12.3s (3 attempts)")
+
+# Reconnect failure
+logger.error("[transport=tcp][addr=192.168.1.100:5025] "
+             "Reconnect failed after 5 attempts (last error: Connection refused)")
+```
+
+**Connection health events at WARNING level:**
+
+```python
+# USB bus reset
+logger.warning("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+               "USB bus reset detected, re-acquiring handle...")
+
+# TCP keepalive failure
+logger.warning("[transport=tcp][addr=192.168.1.100:5025] "
+               "TCP keepalive timed out, probing connection...")
+
+# Serial framing error
+logger.warning("[transport=serial][addr=COM3@115200] "
+               "Serial framing error on byte 0x%02x, resyncing...")
+```
+
+---
+
+### 14.3 Transport Metrics in Health Monitoring
+
+Extend the periodic HEALTH line (Section 4.2) with per-transport metrics:
+
+```python
+log.info("HEALTH | uptime=%ds | "
+         "tcp:lat=%.1fms|retx=%d|pool=%d/%d | "
+         "usb:tx=%dKB/s|err=%d | "
+         "serial:buf=%d/%d|break=%d",
+         uptime,
+         tcp_latency_ms, tcp_retx_count, tcp_pool_used, tcp_pool_max,
+         usb_tx_kbps, usb_err_count,
+         serial_buf_used, serial_buf_size, serial_break_count)
+```
+
+**Key transport metrics per type:**
+
+| Transport | Metrics |
+|-----------|---------|
+| TCP | latency (ms), retransmission count, connection pool usage, socket timeout count |
+| USB | throughput (KB/s), transfer error count, bus reset count |
+| Serial | buffer fill level, framing error count, break signal count |
+| GPIB | timeout count, EOS error count, bus contention count |
+
+**Rules:**
+- Zero errors is normal - log at DEBUG; first error in a period -> WARNING
+- Track deltas since last HEALTH line (not cumulative)
+- Include transport metrics in every HEALTH line, even when zero
+
+---
+
+### 14.4 Protocol / Transport Layer Separation
+
+Log SCPI (or any instrument protocol) traffic on a **child logger** separate from
+transport-layer logs:
+
+```python
+# Logger hierarchy:
+#   "controller"           -> business logic (main log)
+#   "controller.scpi"      -> SCPI commands sent to instruments
+#   "controller.transport" -> TCP/UART raw bytes, USB bulk transfers
+
+logger = logging.getLogger("controller")
+scpi_log = logging.getLogger("controller.scpi")
+transport_log = logging.getLogger("controller.transport")
+```
+
+**Example usage:**
+
+```python
+# Business-level log
+logger.info("[transport=tcp][addr=192.168.1.100:5025] Measure voltage on channel 1")
+
+# SCPI log (separate file, enabled via SCPI_DEBUG=1)
+scpi_log.debug("-> *IDN?")
+scpi_log.debug("<- Keithley 2450, 4430138, v3.0")
+
+# Transport log (separate file, enabled via TRANS_DEBUG=1)
+transport_log.debug("SENT: 7 bytes via TCP stream")
+transport_log.debug("RECV: 41 bytes in 2.3ms (1 TCP segment)")
+```
+
+**Benefits:**
+- Main log stays clean - protocol noise does not mask application events
+- SCPI log is grep-able for "what command caused the instrument to error"
+- Transport log reveals low-level issues (partial reads, TCP fragmentation)
+
+---
+
+### 14.5 Instrument Discovery Logging
+
+Auto-discovery is the most fragile and hardest-to-debug phase of instrument automation.
+Log it thoroughly:
+
+```python
+# Discovery start
+logger.info("[discover][usb] Scanning USB for USBTMC instruments...")
+logger.info("[discover][tcp] Probing subnet 192.168.1.0/24 on port 5025...")
+
+# Discovery results
+logger.info("[discover][usb] Found 3 instruments: "
+            "USB0::0x05E6::0x2450::4430138::INSTR (Keithley 2450), "
+            "USB0::0x1AB1::0x0588::DG4162-12345::INSTR (Rigol DG4162)")
+
+logger.info("[discover][tcp] Found 2 instruments: "
+            "192.168.1.100:5025 (KEITHLEY 2450), "
+            "192.168.1.101:5025 (RIGOL DG4162)")
+
+# Discovery failure (most important to log)
+logger.warning("[discover][tcp] mDNS query for 'KEITHLEY*' returned 0 devices (timeout=5s)")
+logger.warning("[discover][usb] No USBTMC devices found on USB bus (check: driver? power?)")
+
+# Name resolution and matching
+logger.warning("[discover] Config requested 'spectrometer' but no exact match found; "
+               "closest USB device: USB0::0x1AB1::0x0588::DG4162-12345::INSTR")
+```
+
+**Rules:**
+- Log every transport scanned, even if nothing found (negative results matter)
+- Include full instrument identification string for post-mortem matching
+- Log mismatches and fallback logic - these are the #1 source of "works on my bench" bugs
+
+---
+
+### 14.6 Transport Error Classification
+
+Different transports produce different errors. Log them in a way that
+enables transport-specific alerting:
+
+```python
+# TCP errors
+logger.error("[transport=tcp][addr=192.168.1.100:5025] "
+             "Connection refused (target port closed or instrument off)")
+logger.error("[transport=tcp][addr=10.0.0.50:5025] "
+             "Connection timed out (no route to host? wrong subnet?)")
+logger.warning("[transport=tcp][addr=192.168.1.100:5025] "
+               "Partial read: expected 1024 bytes, got 312 (TCP fragmentation)")
+
+# USB errors
+logger.error("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+             "USB transfer failed: LIBUSB_ERROR_PIPE (stalled endpoint)")
+logger.error("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+             "USB transfer failed: LIBUSB_ERROR_NO_DEVICE (cable disconnected)")
+logger.warning("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+               "USB bandwidth exceeded: requested 512 bytes, max packet=64")
+
+# Serial errors
+logger.error("[transport=serial][addr=COM3@115200] "
+             "Serial timeout: no response for 5s (wrong baud rate?)")
+logger.warning("[transport=serial][addr=COM3@115200] "
+               "Serial overrun error: 32 bytes lost (flow control issue?)")
+
+# GPIB errors
+logger.error("[transport=gpib][addr=GPIB0::12] "
+             "GPIB timeout: no SRQ within 10s")
+logger.warning("[transport=gpib][addr=GPIB0::12] "
+               "GPIB EOS error: unexpected terminator byte 0x%02x")
+```
+
+---
+
+### 14.7 Transport-Layer Agent Checklist
+
+When writing instrument automation code, agents MUST additionally check:
+
+- [ ] Every instrument log line tagged with `[transport=xxx][addr=xxx]`
+- [ ] Connection/disconnection logged at INFO with address and device identity
+- [ ] Unexpected disconnections logged at WARNING or ERROR
+- [ ] HEALTH line includes per-transport metrics (latency, errors, throughput)
+- [ ] SCPI protocol and transport layer use separate child loggers
+- [ ] Discovery phase logs each transport scanned and result (including negative)
+- [ ] Transport-specific error messages include actionable recovery hints
+- [ ] Instrument addresses use a canonical format consistent across all log lines
+
+---
+
 **End of Agent Logging Standard**
 
-*Generated from OptoSync project analysis (2026-05-31)*
+*Generated from OptoSync project analysis (2026-06-01)*
+

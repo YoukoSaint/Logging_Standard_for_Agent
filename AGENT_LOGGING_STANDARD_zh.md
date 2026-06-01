@@ -666,6 +666,240 @@ logger.info("用户已认证: %s", username)             # 正确
 
 ---
 
+
+
+---
+
+## 14. 仪器自动化传输层日志
+
+> 针对多设备自动化系统，仪器通过异构传输通道（USB、Ethernet/IP、Serial、GPIB）通信。
+> 每一行日志都必须标明设备是**通过什么方式**通信的，因为故障模式和排查路径因传输层而异。
+
+### 14.1 传输层标记（强制要求）
+
+凡是涉及仪器通信的日志行，**必须**包含传输层标签：
+
+```python
+logger.info("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] 已连接")
+logger.error("[transport=tcp][addr=192.168.1.100:5025] 命令超时，5s 无响应")
+logger.warning("[transport=serial][addr=COM3@115200] 缓冲区溢出，正在清空")
+```
+
+**标签格式：**
+
+| 传输层 | 标签 | 地址格式 |
+|--------|------|----------|
+| USB (USBTMC/VISA) | `transport=usb` | `USB0::VID::PID::serial::INSTR` |
+| TCP/IP (VXI-11, Raw Socket) | `transport=tcp` | `host:port` |
+| 串口 / RS-232 | `transport=serial` | `port@baud` |
+| GPIB | `transport=gpib` | `GPIB0::pad` |
+| 未知 / 自动发现 | `transport=auto` | 包含发现方式 |
+
+**规则：**
+- 始终使用 `[transport=xxx][addr=yyy]` 作为日志级别之后的头两个字段
+- 地址格式在全代码库中保持一致，确保 `grep addr=` 能跨模块检索
+- 当一台仪器可通过多条路径访问（如 USB 和 TCP 皆可），标记当前活跃的那条
+
+---
+
+### 14.2 连接生命周期
+
+每次连接、断开和重连**必须**在 **INFO** 级别记录：
+
+```python
+# 连接
+logger.info("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+            "已连接: idn='Keithley 2450, 4430138, v3.0'")
+
+# 正常断开
+logger.info("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+            "已断开: 用户主动关闭")
+
+# 意外断开（USB 热插拔 / 线缆脱落）
+logger.warning("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+               "连接丢失: 设备从总线移除")
+
+# 自动重连
+logger.info("[transport=tcp][addr=192.168.1.100:5025] "
+            "重连成功: 离线 12.3s (共尝试 3 次)")
+
+# 重连失败
+logger.error("[transport=tcp][addr=192.168.1.100:5025] "
+             "重连失败，已尝试 5 次 (最后一次错误: 连接被拒绝)")
+```
+
+**连接健康事件（WARNING 级别）：**
+
+```python
+# USB 总线复位
+logger.warning("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+               "检测到 USB 总线复位，重新获取句柄...")
+
+# TCP 保活失败
+logger.warning("[transport=tcp][addr=192.168.1.100:5025] "
+               "TCP 保活超时，正在探测连接...")
+
+# 串口帧错误
+logger.warning("[transport=serial][addr=COM3@115200] "
+               "串口帧错误 (byte 0x%02x)，正在重新同步...")
+```
+
+---
+
+### 14.3 健康监控中的传输层指标
+
+在周期性 HEALTH 行（第 4.2 节）中扩展每类传输层的指标：
+
+```python
+log.info("HEALTH | uptime=%ds | "
+         "tcp:lat=%.1fms|retx=%d|pool=%d/%d | "
+         "usb:tx=%dKB/s|err=%d | "
+         "serial:buf=%d/%d|break=%d",
+         uptime,
+         tcp_latency_ms, tcp_retx_count, tcp_pool_used, tcp_pool_max,
+         usb_tx_kbps, usb_err_count,
+         serial_buf_used, serial_buf_size, serial_break_count)
+```
+
+**各类传输层的关键指标：**
+
+| 传输层 | 指标 |
+|--------|------|
+| TCP | 延迟(ms)、重传次数、连接池使用量、Socket 超时次数 |
+| USB | 吞吐量(KB/s)、传输错误次数、总线复位次数 |
+| 串口 | 缓冲区水位、帧错误次数、break 信号次数 |
+| GPIB | 超时次数、EOS 错误次数、总线竞争次数 |
+
+**规则：**
+- 零错误为正常状态——记录在 DEBUG；周期内首次出错升至 WARNING
+- 追踪自上次 HEALTH 行以来的**增量**（非累计值）
+- 即使指标为零，每行 HEALTH 也须包含传输层指标
+
+---
+
+### 14.4 协议层与传输层分离
+
+将 SCPI（或其他仪器协议）的流量记录在独立的**子 Logger** 中，与传输层日志分离：
+
+```python
+# Logger 层级:
+#   "controller"           -> 业务逻辑（主日志）
+#   "controller.scpi"      -> 发往仪器的 SCPI 指令
+#   "controller.transport" -> TCP/UART 原始字节、USB bulk 传输
+
+logger = logging.getLogger("controller")
+scpi_log = logging.getLogger("controller.scpi")
+transport_log = logging.getLogger("controller.transport")
+```
+
+**使用示例：**
+
+```python
+# 业务层日志
+logger.info("[transport=tcp][addr=192.168.1.100:5025] 测量通道 1 电压")
+
+# SCPI 日志（独立文件，通过 SCPI_DEBUG=1 启用）
+scpi_log.debug("-> *IDN?")
+scpi_log.debug("<- Keithley 2450, 4430138, v3.0")
+
+# 传输层日志（独立文件，通过 TRANS_DEBUG=1 启用）
+transport_log.debug("已发送: TCP 流 7 字节")
+transport_log.debug("已接收: 41 字节，耗时 2.3ms (1 个 TCP segment)")
+```
+
+**好处：**
+- 主日志保持干净——协议噪音不会掩盖应用事件
+- SCPI 日志可通过 grep 回答"哪条命令导致了仪器报错"
+- 传输层日志暴露底层问题（部分读取、TCP 分片）
+
+---
+
+### 14.5 仪器发现日志
+
+自动发现是仪器自动化中最脆弱、最难调试的阶段。必须详实记录：
+
+```python
+# 发现开始
+logger.info("[discover][usb] 正在扫描 USB 总线查找 USBTMC 设备...")
+logger.info("[discover][tcp] 正在探测子网 192.168.1.0/24 端口 5025...")
+
+# 发现结果
+logger.info("[discover][usb] 发现 3 台仪器: "
+            "USB0::0x05E6::0x2450::4430138::INSTR (Keithley 2450), "
+            "USB0::0x1AB1::0x0588::DG4162-12345::INSTR (Rigol DG4162)")
+
+logger.info("[discover][tcp] 发现 2 台仪器: "
+            "192.168.1.100:5025 (KEITHLEY 2450), "
+            "192.168.1.101:5025 (RIGOL DG4162)")
+
+# 发现失败（最重要）
+logger.warning("[discover][tcp] mDNS 查询 'KEITHLEY*' 返回 0 台设备 (超时=5s)")
+logger.warning("[discover][usb] USB 总线上未发现 USBTMC 设备 (请检查: 驱动? 供电?)")
+
+# 名称匹配与容错
+logger.warning("[discover] 配置要求 'spectrometer'，未找到精确匹配；"
+               "最接近的 USB 设备: USB0::0x1AB1::0x0588::DG4162-12345::INSTR")
+```
+
+**规则：**
+- 无论是否找到设备，扫描每条传输通道都须记录（负结果同样重要）
+- 包含完整的仪器识别字符串，便于事后比对
+- 记录不匹配和降级逻辑——这是"在我桌上能跑"类 bug 的头号来源
+
+---
+
+### 14.6 传输层错误分类
+
+不同传输层的错误模式不同，应以支持按传输层告警的方式记录：
+
+```python
+# TCP 错误
+logger.error("[transport=tcp][addr=192.168.1.100:5025] "
+             "连接被拒绝 (目标端口关闭或仪器未开机)")
+logger.error("[transport=tcp][addr=10.0.0.50:5025] "
+             "连接超时 (无法路由到主机? 子网错误?)")
+logger.warning("[transport=tcp][addr=192.168.1.100:5025] "
+               "部分读取: 期望 1024 字节，实际收到 312 字节 (TCP 分片)")
+
+# USB 错误
+logger.error("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+             "USB 传输失败: LIBUSB_ERROR_PIPE (端点 stall)")
+logger.error("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+             "USB 传输失败: LIBUSB_ERROR_NO_DEVICE (线缆断开)")
+logger.warning("[transport=usb][addr=USB0::0x05E6::0x2450::4430138::INSTR] "
+               "USB 带宽不足: 请求 512 字节，最大包 64 字节")
+
+# 串口错误
+logger.error("[transport=serial][addr=COM3@115200] "
+             "串口超时: 5s 内无响应 (波特率错误?)")
+logger.warning("[transport=serial][addr=COM3@115200] "
+               "串口溢出: 丢失 32 字节 (流控问题?)")
+
+# GPIB 错误
+logger.error("[transport=gpib][addr=GPIB0::12] "
+             "GPIB 超时: 10s 内未收到 SRQ")
+logger.warning("[transport=gpib][addr=GPIB0::12] "
+               "GPIB EOS 错误: 意外的终止符 0x%02x")
+```
+
+---
+
+### 14.7 传输层 Agent 检查清单
+
+在编写仪器自动化代码时，Agent 必须额外检查：
+
+- [ ] 每条仪器通信日志都带有 `[transport=xxx][addr=xxx]` 标签
+- [ ] 连接/断开在 INFO 级别记录，包含地址和设备身份
+- [ ] 意外断开在 WARNING 或 ERROR 级别记录
+- [ ] HEALTH 行包含每条传输层的指标（延迟、错误、吞吐量）
+- [ ] SCPI 协议和传输层使用独立的子 Logger
+- [ ] 发现阶段记录每条扫描的传输通道及其结果（包括负结果）
+- [ ] 传输层特定错误消息包含可操作的恢复建议
+- [ ] 仪器地址在所有日志行中使用规范的统一格式
+
+---
+
 **Agent 日志编程规范 全文完**
 
-*基于 OptoSync 项目分析提取（2026-05-31）*
+*基于 OptoSync 项目分析提取（2026-06-01）*
+
