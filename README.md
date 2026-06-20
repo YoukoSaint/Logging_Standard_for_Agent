@@ -1,38 +1,34 @@
-# Agent Logging Standard
+# Agent Logging Standard — Agent Reference
 
-> 面向 AI 编码 Agent 的生产级日志编程规范，萃取自真实硬件采集项目。
+⚠️ AI AGENTS: Before writing any logging code, read AGENT_LOGGING_STANDARD_zh.md in full. This README is only a summary.
 
-## 项目简介
+## 这是什么？（面向 AI Agent，非面向人类用户）
 
-本项目提供一套专门为 **AI 编码 Agent**（Claude、GPT 等）编写的日志编程规范，目标是让 Agent 产出的代码具备 **生产运维可读性** —— 开箱即用、出了问题能快速定位。
+本项目是专供 **AI 编码 Agent**（Claude Code、GPT 等）内化使用的日志编程规范参考包，目标是让 Agent 产出的日志代码开箱即用、出问题能快速定位。规范萃取自 [OptoSync](https://github.com/YoukoSaint/OptoSync) 项目的生产实践。
 
-规范基于 [OptoSync](https://github.com/YoukoSaint/OptoSync) 项目的日志实践提炼而成，结合运维思维做举一反三。
+## 使用方式
 
-## 快速安装
-
-### 方式一：Claude Code Skill
+### 方式一：Claude Code Skill（首选 Preferred）
 
 ```bash
-# 安装为全局 skill（所有项目可用）
 cp SKILL.md ~/.claude/skills/agent-logging-standard/SKILL.md
 ```
 
-安装后在 Claude Code 中输入 `/agent-logging-standard` 即可调用。
+安装后在 Claude Code 中输入 `/agent-logging-standard` 即可激活。**这是 Claude Code 用户的推荐方式**——Skill 会自动将完整规范注入 Agent 上下文。
 
-### 方式二：直接引用
+### 方式二：直接注入（通用方法）
 
-```bash
-# 喂给 Agent 作为知识库
-请遵循 AGENT_LOGGING_STANDARD_zh.md 中的日志规范，为以下模块编写代码……
-```
+**将 AGENT_LOGGING_STANDARD_zh.md 全文作为 system prompt 喂给 Agent。不要只给摘要。**
+
+全量注入才能覆盖级别决策速查表、格式字段说明和仪器传输层日志章节。仅给 README 摘要会导致 Agent 遗漏关键实现细节。
 
 ## 文件说明
 
-| 文件 | 类型 | 语言 | 说明 |
-|------|------|------|------|
-| `SKILL.md` | Claude Code Skill | EN | 可直接安装到 `~/.claude/skills/`，Agent 激活后自动执行 |
-| `AGENT_LOGGING_STANDARD.md` | 参考文档 | EN | 完整规范：级别定义、结构化模式、运维模式、错误处理、安全合规、反模式 + 仪器自动化传输层日志 |
-| `AGENT_LOGGING_STANDARD_zh.md` | 参考文档 | 中文 | 同上，追加级别决策速查表、日志格式字段说明和仪器自动化传输层日志章节 |
+| 文件 | 类型 | 语言 | Required reading? | 说明 |
+|------|------|------|-------------------|------|
+| `SKILL.md` | Claude Code Skill | EN | Reference | 可安装到 `~/.claude/skills/`，Agent 激活后自动加载完整规范 |
+| `AGENT_LOGGING_STANDARD_zh.md` | 完整规范 | 中文 | **YES** | 完整规范：级别定义、结构化模式、运维模式、性能、错误处理、安全合规、反模式、仪器传输层日志、决策速查表 |
+| `AGENT_LOGGING_STANDARD.md` | 完整规范 | EN | Reference | 同上英文版（不含速查表和传输层章节） |
 
 ## 规范概要
 
@@ -51,28 +47,44 @@ CRITICAL → 系统崩溃（OOM、磁盘满、安全入侵，必须含恢复建�
 - **热路径克制** — >100 Hz 的循环内不打日志，高频事件用取模采样
 - **安全红线** — 密码、令牌、PII 绝不写入日志
 - **传输层标记** — USB/TCP/Serial/GPIB 通信日志带 `[transport=xxx][addr=xxx]` 标签
-- **连接生命周期** — 连接/断开/重连事件全链路记录，含传输层指标
 - **发现日志** — 仪器自动发现阶段每条传输通道的扫描结果（含负结果）
+- **连接生命周期** — 连接/断开/重连事件全链路记录，含传输层指标
 
-### 10 项 Agent 检查清单（+ 3 项仪器自动化补充）
+## 13 项 Agent 检查清单
 
-- ✅ `setup_logging()` 在入口点调用，使用时间戳文件
-- ✅ 文件 Handler = DEBUG，控制台 Handler = INFO
-- ✅ 每个模块 `logging.getLogger(__name__)`
-- ✅ 长运行操作记录 START/STOP + 指标
-- ✅ except 块中使用 `logger.exception()`
-- ✅ 量化日志带单位（Hz、MB、ms、%）
-- ✅ 不在 >100 Hz 循环内打日志
-- ✅ 使用 `%s` 格式化而非 f-string
-- ✅ 绝不记录密码/令牌/PII
-- ✅ 守护进程添加健康监控
-- ✅ 仪器日志标注传输层来源 `[transport=xxx][addr=xxx]`
-- ✅ 独立子 Logger 分离 SCPI 协议日志与传输层日志
-- ✅ 发现阶段记录每条传输通道的扫描结果
+> 详细实现参见 AGENT_LOGGING_STANDARD_zh.md 各章节。
+
+### 基础日志配置（§3 结构化日志模式）
+
+- [ ] `setup_logging()` 在入口点调用，使用时间戳文件
+- [ ] 文件 Handler = DEBUG，控制台 Handler = INFO
+- [ ] 每个模块 `logging.getLogger(__name__)`
+
+### 日志内容与格式（§4 运维日志模式, §6 错误处理与日志, §8 指标与可观测性）
+
+- [ ] 长运行操作记录 START/STOP + 指标
+- [ ] except 块中使用 `logger.exception()`
+- [ ] 量化日志带单位（Hz、MB、ms、%）
+
+### 性能与安全（§5 性能友好的日志, §9 安全与合规）
+
+- [ ] 不在 >100 Hz 循环内打日志
+- [ ] 使用 `%s` 格式化而非 f-string
+- [ ] 绝不记录密码/令牌/PII
+
+### 运维保障（§4.2 健康监控）
+
+- [ ] 守护进程添加健康监控
+
+### 仪器自动化补充（§14 仪器自动化传输层日志）
+
+- [ ] 仪器日志标注传输层来源 `[transport=xxx][addr=xxx]`
+- [ ] 独立子 Logger 分离 SCPI 协议日志与传输层日志
+- [ ] 发现阶段记录每条传输通道的扫描结果
 
 ## 参考来源
 
-- [OptoSync](https://github.com/YoukoSaint/OptoSync) — 多设备同步采集系统（Keithley 2461 + Ideaoptics 光谱仪）
+- [OptoSync](https://github.com/YoukoSaint/OptoSync) — 多设备同步采集系统
 - 核心参考文件：`core/logging_config.py`、`core/sync_controller.py`、`core/health_monitor.py`、`drivers/keithley_driver.py`
 
 ## 许可

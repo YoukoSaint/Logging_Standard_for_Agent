@@ -1,3 +1,15 @@
+<!--
+🚨 AGENT INSTRUCTION: This is the COMPLETE specification. Read ALL sections before writing any code.
+The README.md checklist is a SUMMARY — this file contains the actual implementation requirements.
+Key sections to read FIRST:
+  - §2 日志级别 (strict DEBUG/INFO/WARNING/ERROR/CRITICAL definitions)
+  - §3 setup_logging() pattern (dual Handler, timestamped files)
+  - §4 结构化日志模式 (START/STOP pairs, quantified metrics)
+  - §5 错误处理 (logger.exception, stack traces)
+  - §7 安全合规 (never log secrets/PII)
+  - §8 反模式 (what NOT to do)
+-->
+
 # 面向运维的 Agent 日志编程规范
 
 > **来源**: OptoSync 项目日志实践萃取  
@@ -902,4 +914,28 @@ logger.warning("[transport=gpib][addr=GPIB0::12] "
 **Agent 日志编程规范 全文完**
 
 *基于 OptoSync 项目分析提取（2026-06-01）*
+
+---
+
+## 速查表 Quick Reference
+
+> Agent: bookmark this section. It summarizes every rule you must follow.
+
+| # | 规则 | 违反后果 |
+|---|------|----------|
+| 1 | `setup_logging()` 在 `main()` 入口调用，双 handler（文件=DEBUG，控制台=INFO） | 日志丢失或生产噪音过多 |
+| 2 | 批处理/守护进程使用时间戳日志文件 `{app}_{%Y%m%d_%H%M%S}.log` | 无法按运行隔离排查 |
+| 3 | 使用 `logging.getLogger(__name__)`，文件格式含 `%(name)s:%(lineno)d` | 无法定位日志来源 |
+| 4 | 长运行操作必须记录 START/STOP 对，附带量化指标和单位 | 不知道操作是否完成、是否正常 |
+| 5 | except 块用 `logger.exception()`（自动含 traceback）；错误日志必须说明影响范围 | 堆栈丢失，无法回溯根因 |
+| 6 | 使用 `%s` 延迟格式化，绝不用 f-string 写日志 | 热路径 CPU 浪费，生产环境性能下降 |
+| 7 | 高频循环（>100 Hz）内不打日志，改用取模采样 | 日志文件爆炸，IO 阻塞主逻辑 |
+| 8 | 绝不记录密码、令牌、密钥、PII；脱敏只留前缀或后 4 位 | 安全合规事故 |
+| 9 | 使用统一前缀便于 grep：`HEALTH \|`、`AUDIT \|`、`[transport=xxx][addr=yyy]` | 日志大海捞针 |
+| 10 | 长运行进程每 30-60s 输出一行 HEALTH（内存、CPU、吞吐量、传输层指标） | 无健康基线，故障发现滞后 |
+| 11 | 仪器通信日志必须带 `[transport=xxx][addr=xxx]`；发现阶段记录所有扫描结果（含负结果） | 连接问题无从排查 |
+| 12 | SCPI/协议流量用独立子 Logger（`logger.getChild("scpi")`），写独立文件 | 协议噪音淹没业务日志 |
+| 13 | 重试时打 WARNING（含 N/M 次数），最终失败打 ERROR | 不知道重试了没有、失败原因不明 |
+| 14 | 日志必须回答：谁、什么、何时、为什么、多少 —— 假设读者看不到源码 | 生产故障时束手无策 |
+| 15 | 写完代码后 grep 验证：`grep "except.*pass"`、`grep "logger.*f\""`、`grep "print("` 必须无结果 | 反模式遗留到生产环境 |
 

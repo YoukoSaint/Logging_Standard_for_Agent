@@ -4,6 +4,8 @@ description: Production-grade logging standards for AI agents writing maintainab
 origin: Log_Standard_for_Agent
 ---
 
+> ⚠️ This Skill is a CONDENSED reference. For the COMPLETE specification with full rationale, examples, and anti-patterns, read AGENT_LOGGING_STANDARD_zh.md.
+
 # Agent Logging Standard
 
 Production-grade logging patterns extracted from the OptoSync hardware acquisition system,
