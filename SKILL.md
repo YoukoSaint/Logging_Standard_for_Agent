@@ -219,17 +219,58 @@ Separate logger → separate file → immutable history.
 
 ## 10. Agent Checklist (verify before marking code complete)
 
+### Core setup (§3)
+
 - [ ] `setup_logging()` called in entry point with timestamped file
 - [ ] File handler = DEBUG, console handler = INFO
 - [ ] Every module uses `logging.getLogger(__name__)`
+- [ ] Consistent prefixes for grep (`HEALTH |`, `USER_ACTION |`, `FILE_IO |`, `[transport=xxx][addr=xxx]`)
+
+### Logging content (§4 / §6 / §8)
+
 - [ ] START/STOP logged for long-running operations with metrics
 - [ ] `logger.exception()` used in except blocks for unexpected errors
-- [ ] All quantitative logs include units (Hz, MB, ms, %)
+- [ ] All quantitative logs include units (Hz, MB, ms, %, °C, W)
+
+### Performance & security (§5 / §9)
+
 - [ ] No log calls inside >100 Hz loops
 - [ ] `%s` formatting used (not f-strings)
 - [ ] No passwords, tokens, or PII in any log
-- [ ] Health monitoring added for daemon processes
-- [ ] Consistent prefixes for grep (HEALTH |, ALERT |, AUDIT |)
+
+### User interaction (§15)
+
+- [ ] All user-triggered events include `user_id` (non-reversible ID)
+- [ ] Login/logout/auth failures logged in separate `audit.user` logger
+- [ ] Config changes record `old=` → `new=` (sensitive fields `[REDACTED]`)
+- [ ] User cancellation (INFO) vs system crash (CRITICAL) strictly distinguished
+- [ ] Permission denials include `user_id` + `required_role` + `resource`
+
+### System resources & periodic metrics (§16)
+
+- [ ] Health monitoring added for daemon processes (HEALTH line)
+- [ ] HEALTH line includes the five required fields: `uptime / rss / cpu / thr / q`
+- [ ] GPU workloads record `gpu=idx:util|mem|temp|pwr`
+- [ ] High-concurrency services add `fds` + `net:est|tw|cw`
+- [ ] Disk-writing daemons add `disk:mount=pct%`
+- [ ] Threshold alerts per §16.4 table (WARNING/ERROR/CRITICAL)
+
+### Physical interfaces (§14 / §17)
+
+- [ ] Every instrument log line tagged with `[transport=xxx][addr=xxx]`
+- [ ] Embedded/industrial/vision interfaces (§17) use corresponding transport tags
+- [ ] High-frequency physical interfaces (>100 Hz) use child logger + periodic summary
+- [ ] Startup records bus/device enumeration (including negatives)
+
+### File I/O (§18)
+
+- [ ] File I/O logs begin with `FILE_IO | op=<op> kind=<kind> path=<path>`
+- [ ] Business data writes go through `tmp + os.replace` atomic write
+- [ ] `fsync` failure escalates to CRITICAL
+- [ ] Write loops aggregate with `rows % BATCH == 0`
+- [ ] Config load failure = CRITICAL
+
+> Full per-dimension checklists: §15.8 / §16.9 / §17.9 / §18.9.
 
 
 
@@ -287,6 +328,131 @@ logger.warning("[discover][tcp] No devices found (timeout=5s)")
 - [ ] Discovery logs every scanned transport (including empty results)
 - [ ] Error messages include actionable recovery hints per transport type
 
+## 12. USER_ACTION — User Interaction & Audit (condensed)
+
+> Multi-user systems require `user_id` context on every user-triggered event. See **§15** in AGENT_LOGGING_STANDARD_zh.md for the full specification.
+
+```python
+audit = logging.getLogger("audit.user")
+
+# Login lifecycle
+audit.info("USER_ACTION | user=%s | role=%s | session=%s | action=LOGIN | result=SUCCESS | src=%s",
+           user_id, role, session_id, source_ip)
+audit.warning("USER_ACTION | user=%s | action=LOGIN | result=FAIL | reason=%s | src=%s",
+              user_id, "invalid_password", source_ip)
+audit.critical("USER_ACTION | user=%s | action=LOGIN | result=DENIED | reason=account_locked | attempts=%d",
+               user_id, failed_attempts)
+
+# Config change with redaction
+audit.info("USER_ACTION | user=%s | action=CONFIG_SET | key=api_token | "
+           "old=[REDACTED] | new=[REDACTED] | result=SUCCESS", user_id)
+
+# Permission denial
+audit.error("USER_ACTION | user=%s | role=%s | action=%s | resource=%s | "
+            "required_role=%s | result=DENIED | reason=insufficient_role",
+            user_id, role, attempted_action, resource_id, required_role)
+```
+
+**Field dictionary**: `user=<uid> | role=<role> | session=<sid> | tenant=<tid> | action=<verb> | resource=<id> | result=SUCCESS|DENIED|FAIL | reason=<why>`
+
+**Rules:**
+- `user` MUST be an internal non-reversible ID (not email/phone/name)
+- Sensitive values (config, user input) → `[REDACTED]`
+- `audit` logger is never disabled
+
+## 13. HEALTH & METRICS — System Resources (condensed)
+
+> §4.2 only shows a demo line. For ML/AI workloads, GPU/VRAM/disk/FDS/network are MANDATORY. See **§16** for the full spec, threshold table, and `psutil + pynvml` collection template.
+
+```python
+log.info(
+    "HEALTH | uptime=%ds | rss=%.1fMB (Δ%+.1f) | cpu=%.1f%% (load=%.2f) | "
+    "thr=%d coro=%d | fds=%d/%d | net:est=%d|tw=%d|cw=%d | "
+    "gpu=%d:util=%d%%|mem=%d/%dMB(%.0f%%)|temp=%dC|pwr=%dW | "
+    "disk:root=%.0f%%|data=%.0f%%|log=%.0f%% | q=%d/%d | rate=%.1f/s",
+    ...)
+```
+
+**Required fields**: `uptime / rss / cpu / thr / q`
+**Recommended by process type**: `gpu=...`, `disk:mount=...`, `fds=...`, `net:...`, `load=...`, `coro=...`
+
+**Threshold table (defaults):**
+
+| Metric | WARNING | ERROR | CRITICAL |
+|--------|---------|-------|----------|
+| RSS growth rate | > 50 MB/h | > 200 MB/h | monotonically rising 1h |
+| Disk usage | > 80% | > 90% | > 95% or inode > 90% |
+| VRAM usage | > 85% | > 95% | = 100% (OOM imminent) |
+| GPU temperature | > 80°C | > 88°C | > 95°C |
+| FDs usage | > 70% ulimit | > 85% ulimit | = ulimit |
+
+**Short tasks (< 2 × interval)** skip HEALTH — use START/STOP summary instead.
+
+## 14. Physical Interface Layer — General-Purpose (condensed)
+
+> §14 covers measurement instruments only. §17 extends to general physical interfaces. Tag every line with `[transport=xxx][addr=xxx]`.
+
+| Layer | Tag | Address format |
+|-------|-----|----------------|
+| GPIO | `transport=gpio` | `chip=0/line=17` |
+| I²C | `transport=i2c` | `/dev/i2c-1@0x48` |
+| SPI | `transport=spi` | `/dev/spidev0.0@1MHz` |
+| CAN | `transport=can` | `can0@1Mbps` |
+| Modbus | `transport=modbus` | `slave=0x01@COM3@9600` / `tcp:host:502/slave=0x01` |
+| OPC-UA | `transport=opcua` | `opc.tcp://host:4840/ns=2;s=Channel1` |
+| UVC | `transport=uvc` | `/dev/video0@MJPEG@1920x1080@30fps` |
+| GigE | `transport=gige` | `192.168.1.50@GVSP@Basler-acA1920` |
+| Step/servo pulse | `transport=pulse` | `AXIS0@dir=DIR1,pul=PUL2` |
+| PWM | `transport=pwm` | `chip=0/channel=0@1kHz@50%` |
+
+**Atomic-operation granularity** (KEY rule — not in §14):
+
+| Frequency | Granularity |
+|-----------|-------------|
+| < 10 Hz | Every event at INFO/DEBUG |
+| 10–100 Hz | START/STOP at INFO, sample every 100 at DEBUG |
+| 100–1000 Hz | Only errors at WARNING/ERROR; periodic HEALTH summary |
+| > 1000 Hz | **NEVER per-event** — child logger + periodic counter + on-anomaly |
+
+**Discovery MUST log negatives**: `[discover][can] can0 not up`, `[discover][i2c] no devices found`, etc.
+
+## 15. FILE_IO — File & Storage I/O (condensed)
+
+> §4.4 only covers `close` failure. See **§18** for the full spec.
+
+```python
+# Unified prefix
+logger.info("FILE_IO | op=write kind=data path=/data/run_001.csv rows=100000 bytes=12.4MB dur=3.21s")
+
+# Atomic write (mandatory for business data)
+def atomic_write(path, data):
+    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data); f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, path)
+        logger.info("FILE_IO | op=rename kind=data path=%s -> %s bytes=%d", tmp, path, len(data))
+    except Exception:
+        logger.exception("FILE_IO | op=write kind=data path=%s FAILED", path)
+        try: os.unlink(tmp)
+        except FileNotFoundError: pass
+        raise
+```
+
+**Field dictionary**: `op=<op> kind=<kind> path=<path> [bytes=...] [rows=...] [dur=...]`
+**`op`**: `open` / `read` / `write` / `flush` / `fsync` / `close` / `rename` / `delete` / `lock` / `unlock`
+**`kind`**: `config` / `data` / `tmp` / `state` / `lock` / `log`
+
+**Failure → level**:
+- `FileNotFoundError` (read) → ERROR
+- `FileNotFoundError` (write) → CRITICAL
+- `PermissionError` → CRITICAL
+- `OSError(errno=28)` ENOSPC → CRITICAL
+- `flush` / `fsync` failure → CRITICAL
+- `close` failure → ERROR with `logger.exception`
+
+**Chunked reads**: `read()` MUST NOT exceed 64 MiB; no logs inside the loop.
+
 ## Anti-Patterns Quick Reference
 
 | ❌ Wrong | ✅ Right |
@@ -296,3 +462,8 @@ logger.warning("[discover][tcp] No devices found (timeout=5s)")
 | `logger.debug(f"{x}")` | `logger.debug("%s", x)` |
 | `except: pass` | `except Exception: logger.exception(...)` |
 | `logger.info("pwd=%s", pwd)` | `logger.info("user=%s auth=OK", user)` |
+| `logger.error("Permission denied")` | `logger.error("AUTHZ_DENIED \| user=%s \| resource=%s", uid, rid)` |
+| `for msg in can_bus: logger.info(...)` | child logger + periodic summary (§14) |
+| `data = open("big.bin","rb").read()` | chunked ≤ 64 MiB (§15) |
+| `open("/data/x.csv","w").write(...)` | `tmp + os.replace` (§15) |
+| `HEALTH \| rss=... cpu=...` (ML workload) | include `gpu=idx:util\|mem\|temp\|pwr` (§13) |
