@@ -1,6 +1,6 @@
 # Agent Logging Standard — Agent Reference
 
-⚠️ AI AGENTS: Before writing any logging code, read AGENT_LOGGING_STANDARD_zh.md in full. This README is only a summary.
+⚠️ AI AGENTS: Before writing any logging code, read AGENT_LOGGING_STANDARD.md and AGENT_LOGGING_STANDARD_zh.md in full. This README is only a summary.
 
 ## 这是什么？（面向 AI Agent，非面向人类用户）
 
