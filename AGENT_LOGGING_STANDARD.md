@@ -163,6 +163,8 @@ log_filepath = os.path.join(log_dir, f"{app_name}_{ts}.log")
 
 **Agent rule:** ALWAYS use timestamped log files for batch jobs, daemons, and long-running processes.
 
+> Per-run files need no rotation. A single run that can produce unbounded output (long-running daemon) may additionally cap file size with `RotatingFileHandler`, as in §11.
+
 ---
 
 ### 3.2 Dual-Handler Setup (File + Console)
@@ -241,7 +243,7 @@ logger.info("Acquisition stopped: %d points in %.1f s (target=%.1f Hz, actual=%.
 
 **Pattern from OptoSync (minimal):**
 ```python
-log.info("HEALTH | uptime=%ds | RSS=%.1fMB (Δ%.1f) | CPU=%.1f%% | thr=%d | acq=%dsmp @%.1fHz | stream=%s q=%d/%d",
+log.info("HEALTH | uptime=%ds | rss=%.1fMB (Δ%+.1f) | cpu=%.1f%% | thr=%d | acq=%dsmp @%.1fHz | stream=%s q=%d/%d",
          uptime, rss_mb, rss_delta, cpu_pct, thread_count, sample_count, rate, stream_status, queue_depth, queue_max)
 ```
 
@@ -457,7 +459,7 @@ logger.info("Acquisition stopped: %d points in %.1f s (target=%.1f Hz, actual=%.
 **Pattern from OptoSync:**
 ```python
 # Every 30 seconds
-log.info("HEALTH | uptime=%ds | RSS=%.1fMB (Δ%.1f) | CPU=%.1f%% | ...")
+log.info("HEALTH | uptime=%ds | rss=%.1fMB (Δ%+.1f) | cpu=%.1f%% | ...")
 ```
 
 **Rules:**
@@ -482,7 +484,7 @@ logger.debug("Credit card: %s", cc_number)
 
 **Correct:**
 ```python
-logger.debug("API key: %s", api_key[:8] + "..." if api_key else None)
+logger.debug("API key: present=%s len=%d", bool(api_key), len(api_key or ""))
 logger.info("User authenticated: %s", username)
 logger.debug("Payment processed: last4=%s", cc_last4)
 ```
@@ -592,6 +594,7 @@ Example: Production-grade logging setup for an agent-written application.
 import logging
 import logging.handlers
 import os
+import time
 from datetime import datetime
 
 def setup_logging(app_name="MyApp", log_dir="logs", console_level=logging.INFO):
@@ -637,8 +640,10 @@ logger = logging.getLogger(__name__)
 
 def process_data(data_id, payload):
     logger.info("[%s] Processing started: %d bytes", data_id, len(payload))
+    t0 = time.monotonic()
     try:
         result = expensive_operation(payload)
+        elapsed = time.monotonic() - t0
         logger.info("[%s] Processing completed: %d results in %.2f s",
                     data_id, len(result), elapsed)
         return result
@@ -729,6 +734,7 @@ except: pass                           # power loss = data loss
 ```python
 log.info("HEALTH | rss=%.1fMB cpu=%.1f%%", rss, cpu)    # silent OOM during training
 # GOOD: include gpu=idx:util|mem|temp|pwr (see §16.2)
+```
 
 ---
 
@@ -824,7 +830,7 @@ logger.warning("[transport=tcp][addr=192.168.1.100:5025] "
 
 # Serial framing error
 logger.warning("[transport=serial][addr=COM3@115200] "
-               "Serial framing error on byte 0x%02x, resyncing...")
+               "Serial framing error on byte 0x%02x, resyncing...", bad_byte)
 ```
 
 ---
@@ -854,9 +860,9 @@ log.info("HEALTH | uptime=%ds | "
 | GPIB | timeout count, EOS error count, bus contention count |
 
 **Rules:**
-- Zero errors is normal - log at DEBUG; first error in a period -> WARNING
+- Always include the transport fields in every HEALTH line, even when zero (keeps the line parseable)
+- Zero errors is normal and needs no extra line; first error in a period -> WARNING
 - Track deltas since last HEALTH line (not cumulative)
-- Include transport metrics in every HEALTH line, even when zero
 
 ---
 
@@ -965,7 +971,7 @@ logger.warning("[transport=serial][addr=COM3@115200] "
 logger.error("[transport=gpib][addr=GPIB0::12] "
              "GPIB timeout: no SRQ within 10s")
 logger.warning("[transport=gpib][addr=GPIB0::12] "
-               "GPIB EOS error: unexpected terminator byte 0x%02x")
+               "GPIB EOS error: unexpected terminator byte 0x%02x", term_byte)
 ```
 
 ---
@@ -1024,7 +1030,7 @@ audit.warning("USER_ACTION | user=%s | action=LOGIN | result=FAIL | reason=%s | 
               user_id, "invalid_password", source_ip)
 
 # Account locked (consecutive failures)
-audit.critical("USER_ACTION | user=%s | action=LOGIN | result=DENIED | reason=account_locked | attempts=%d",
+audit.error("USER_ACTION | user=%s | action=LOGIN | result=DENIED | reason=account_locked | attempts=%d",
                user_id, failed_attempts)
 
 # Logout
@@ -1202,7 +1208,7 @@ PROC_START = time.monotonic()
 
 def collect_health(prev_rss_mb: Optional[float] = None) -> dict:
     """Collect one round of metrics. Sub-component failures MUST NOT raise."""
-    out = dict(uptime_sec=int(time.monotonic() - PROC_START),
+    out = dict(uptime_sec=int(time.monotonic() - PROC_START),  # gpus: list[dict] added below when NVML is available
                rss_mb=0.0, rss_delta_mb=0.0, cpu_pct=0.0, load_avg_1=0.0,
                thread_count=0, coro_count=0, fds_used=0, fds_max=0,
                net_est=0, net_tw=0, net_cw=0,
@@ -1249,11 +1255,11 @@ def collect_health(prev_rss_mb: Optional[float] = None) -> dict:
                 m = pynvml.nvmlDeviceGetMemoryInfo(h)
                 t = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
                 p = int(pynvml.nvmlDeviceGetPowerUsage(h) / 1000.0)
-                gpus.append(dict(idx=i, util=u.gpu,
-                                 mem_used=m.used // (1024*1024),
-                                 mem_total=m.total // (1024*1024),
+                gpus.append(dict(idx=i, util_pct=u.gpu,
+                                 mem_used_mb=m.used // (1024*1024),
+                                 mem_total_mb=m.total // (1024*1024),
                                  mem_pct=100.0 * m.used / m.total,
-                                 temp_c=t, power_w=p))
+                                 temp_c=t, power_w=p))  # keys match format_health()
             out["gpus"] = gpus
         except Exception as e:
             log.warning("NVML collection failed: %s", e)
@@ -1553,7 +1559,7 @@ except FileNotFoundError:
     logger.error("FILE_IO | op=open kind=data path=%s FAILED reason=not_found", path); raise
 except PermissionError as e:
     logger.critical("FILE_IO | op=open kind=data path=%s FAILED reason=permission_denied user=%s",
-                    path, os.getuser()); raise
+                    path, getpass.getuser()); raise  # import getpass
 except OSError as e:
     logger.critical("FILE_IO | op=open kind=data path=%s FAILED errno=%d msg=%s",
                     path, e.errno, e.strerror); raise
@@ -1578,6 +1584,7 @@ try:
 except OSError as e:
     logger.critical("FILE_IO | op=fsync kind=data path=%s FAILED errno=%d msg=%s (durability NOT guaranteed)",
                     path, e.errno, e.strerror)
+    raise  # never swallow: caller must treat the data as not persisted
 
 # ── 4. close ────────────────────────────────────
 try:
@@ -1625,6 +1632,9 @@ def atomic_write(path: str, data: bytes) -> None:
 Loading config at startup is a P0 critical path:
 
 ```python
+import hashlib
+import yaml  # PyYAML
+
 def load_config(path: str) -> dict:
     logger.info("FILE_IO | op=open kind=config path=%s", path)
     try:

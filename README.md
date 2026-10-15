@@ -14,7 +14,7 @@
 cp SKILL.md ~/.claude/skills/agent-logging-standard/SKILL.md
 ```
 
-安装后在 Claude Code 中输入 `/agent-logging-standard` 即可激活。**这是 Claude Code 用户的推荐方式**——Skill 会自动将完整规范注入 Agent 上下文。
+安装后在 Claude Code 中输入 `/agent-logging-standard` 即可激活。**这是 Claude Code 用户的推荐方式**——Skill 会把精简版规范注入 Agent 上下文；需要完整细节时，Agent 应再读取 `AGENT_LOGGING_STANDARD_zh.md`。
 
 ### 方式二：直接注入（通用方法）
 
@@ -28,7 +28,7 @@ cp SKILL.md ~/.claude/skills/agent-logging-standard/SKILL.md
 |------|------|------|-------------------|------|
 | `SKILL.md` | Claude Code Skill | EN | Reference | 可安装到 `~/.claude/skills/`，Agent 激活后自动加载完整规范 |
 | `AGENT_LOGGING_STANDARD_zh.md` | 完整规范 | 中文 | **YES** | 完整规范：级别定义、结构化模式、运维模式、性能、错误处理、安全合规、反模式、仪器传输层日志、决策速查表 |
-| `AGENT_LOGGING_STANDARD.md` | 完整规范 | EN | Reference | 同上英文版（不含速查表和传输层章节） |
+| `AGENT_LOGGING_STANDARD.md` | 完整规范 | EN | Reference | 同上英文版（不含决策速查表附录） |
 
 ## 规范概要
 
@@ -55,7 +55,7 @@ CRITICAL → 系统崩溃（OOM、磁盘满、安全入侵，必须含恢复建�
 - **发现日志** — 仪器自动发现阶段每条传输通道的扫描结果（含负结果）
 - **连接生命周期** — 连接/断开/重连事件全链路记录，含传输层指标
 
-## 25 项 Agent 检查清单
+## 30 项 Agent 检查清单
 
 > 详细实现参见 AGENT_LOGGING_STANDARD_zh.md 各章节。
 

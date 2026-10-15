@@ -494,7 +494,7 @@ logger.debug("Credit card: %s", cc_number)
 
 **正确做法：**
 ```python
-logger.debug("API key: %s", api_key[:8] + "..." if api_key else None)
+logger.debug("API key: present=%s len=%d", bool(api_key), len(api_key or ""))
 logger.info("User authenticated: %s", username)
 logger.debug("Payment processed: last4=%s", cc_last4)
 ```
@@ -604,6 +604,7 @@ Agent 在编写代码时，必须检查：
 import logging
 import logging.handlers
 import os
+import time
 from datetime import datetime
 
 def setup_logging(app_name="MyApp", log_dir="logs", console_level=logging.INFO):
@@ -650,8 +651,10 @@ logger = logging.getLogger(__name__)
 def process_data(data_id: str, payload: bytes) -> list:
     """处理数据并记录完整链路。"""
     logger.info("[%s] 开始处理: %d 字节", data_id, len(payload))
+    t0 = time.monotonic()
     try:
         result = expensive_operation(payload)
+        elapsed = time.monotonic() - t0
         logger.info("[%s] 处理完成: %d 条结果, 耗时 %.2f 秒",
                     data_id, len(result), elapsed)
         return result
@@ -742,6 +745,7 @@ except: pass                           # 断电即丢数据
 ```python
 log.info("HEALTH | rss=%.1fMB cpu=%.1f%%", rss, cpu)    # ML 训练静默 OOM
 # 正确：含 gpu=idx:util|mem|temp|pwr（见 §16.2）
+```
 
 ---
 
@@ -867,7 +871,7 @@ logger.warning("[transport=tcp][addr=192.168.1.100:5025] "
 
 # 串口帧错误
 logger.warning("[transport=serial][addr=COM3@115200] "
-               "串口帧错误 (byte 0x%02x)，正在重新同步...")
+               "串口帧错误 (byte 0x%02x)，正在重新同步...", bad_byte)
 ```
 
 ---
@@ -897,9 +901,9 @@ log.info("HEALTH | uptime=%ds | "
 | GPIB | 超时次数、EOS 错误次数、总线竞争次数 |
 
 **规则：**
-- 零错误为正常状态——记录在 DEBUG；周期内首次出错升至 WARNING
+- 即使指标为零，每行 HEALTH 也须包含传输层字段（保证行可解析）
+- 零错误为正常状态，无需额外输出；周期内首次出错升至 WARNING
 - 追踪自上次 HEALTH 行以来的**增量**（非累计值）
-- 即使指标为零，每行 HEALTH 也须包含传输层指标
 
 ---
 
@@ -1005,7 +1009,7 @@ logger.warning("[transport=serial][addr=COM3@115200] "
 logger.error("[transport=gpib][addr=GPIB0::12] "
              "GPIB 超时: 10s 内未收到 SRQ")
 logger.warning("[transport=gpib][addr=GPIB0::12] "
-               "GPIB EOS 错误: 意外的终止符 0x%02x")
+               "GPIB EOS 错误: 意外的终止符 0x%02x", term_byte)
 ```
 
 ---
@@ -1064,7 +1068,7 @@ audit.warning("USER_ACTION | user=%s | action=LOGIN | result=FAIL | reason=%s | 
               user_id, "invalid_password", source_ip)
 
 # 账号被锁（连续失败）
-audit.critical("USER_ACTION | user=%s | action=LOGIN | result=DENIED | reason=account_locked | attempts=%d",
+audit.error("USER_ACTION | user=%s | action=LOGIN | result=DENIED | reason=account_locked | attempts=%d",
                user_id, failed_attempts)
 
 # 登出
@@ -1288,9 +1292,9 @@ def collect_health(prev_rss_mb: Optional[float] = None) -> dict:
                 m = pynvml.nvmlDeviceGetMemoryInfo(h)
                 t = pynvml.nvmlDeviceGetTemperature(h, pynvml.NVML_TEMPERATURE_GPU)
                 p = int(pynvml.nvmlDeviceGetPowerUsage(h) / 1000.0)
-                gpus.append(dict(idx=i, util=u.gpu,
-                                 mem_used=m.used // (1024*1024),
-                                 mem_total=m.total // (1024*1024),
+                gpus.append(dict(idx=i, util_pct=u.gpu,
+                                 mem_used_mb=m.used // (1024*1024),
+                                 mem_total_mb=m.total // (1024*1024),
                                  mem_pct=100.0 * m.used / m.total,
                                  temp_c=t, power_w=p))
             out["gpus"] = gpus
@@ -1592,7 +1596,7 @@ except FileNotFoundError:
     logger.error("FILE_IO | op=open kind=data path=%s FAILED reason=not_found", path); raise
 except PermissionError as e:
     logger.critical("FILE_IO | op=open kind=data path=%s FAILED reason=permission_denied user=%s",
-                    path, os.getuser()); raise
+                    path, getpass.getuser()); raise  # 需 import getpass
 except OSError as e:
     logger.critical("FILE_IO | op=open kind=data path=%s FAILED errno=%d msg=%s",
                     path, e.errno, e.strerror); raise
@@ -1617,6 +1621,7 @@ try:
 except OSError as e:
     logger.critical("FILE_IO | op=fsync kind=data path=%s FAILED errno=%d msg=%s (durability NOT guaranteed)",
                     path, e.errno, e.strerror)
+    raise  # 不得吞掉：调用方必须将数据视为未持久化
 
 # ── 4. close ────────────────────────────────────
 try:
@@ -1664,6 +1669,9 @@ def atomic_write(path: str, data: bytes) -> None:
 启动时加载配置是 P0 关键路径：
 
 ```python
+import hashlib
+import yaml  # PyYAML
+
 def load_config(path: str) -> dict:
     logger.info("FILE_IO | op=open kind=config path=%s", path)
     try:

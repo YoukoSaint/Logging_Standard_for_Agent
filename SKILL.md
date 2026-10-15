@@ -158,15 +158,15 @@ For any process running longer than a few minutes, add periodic health logging:
 
 ```python
 # Every 30-60 seconds, ONE line with all key metrics
-log.info("HEALTH | uptime=%ds | RSS=%.1fMB (Δ%.1f) | CPU=%.1f%% | thr=%d | "
-         "acq=%dsmp @%.1fHz | q=%d/%d",
+log.info("HEALTH | uptime=%ds | rss=%.1fMB (Δ%+.1f) | cpu=%.1f%% | thr=%d | "
+         "rate=%.1f/s | q=%d/%d",
          uptime, rss_mb, rss_delta, cpu_pct, thread_count, rate, queue_depth, queue_max)
 ```
 
 Rules:
 - **Consistent prefix** (e.g., `HEALTH |`) for grep
 - **Include deltas** (Δ) for trend detection — RSS growing by 50 MB/h = leak
-- **Alert thresholds**: log WARNING when RSS growth > 50 MB/h, ERROR when RSS > 500 MB
+- **Alert thresholds**: see the threshold table in section 13 (e.g. RSS growth WARNING > 50 MB/h, ERROR > 200 MB/h)
 
 ## 7. Performance Rules
 
@@ -203,7 +203,7 @@ Forbidden in ALL log levels including DEBUG:
 logger.debug("API key: %s", api_key)
 
 # RIGHT
-logger.debug("API key: %s...", api_key[:8])
+logger.debug("API key: present=%s len=%d", bool(api_key), len(api_key or ""))
 logger.info("User authenticated: %s", username)  # non-sensitive identifier only
 ```
 
@@ -340,7 +340,7 @@ audit.info("USER_ACTION | user=%s | role=%s | session=%s | action=LOGIN | result
            user_id, role, session_id, source_ip)
 audit.warning("USER_ACTION | user=%s | action=LOGIN | result=FAIL | reason=%s | src=%s",
               user_id, "invalid_password", source_ip)
-audit.critical("USER_ACTION | user=%s | action=LOGIN | result=DENIED | reason=account_locked | attempts=%d",
+audit.error("USER_ACTION | user=%s | action=LOGIN | result=DENIED | reason=account_locked | attempts=%d",
                user_id, failed_attempts)
 
 # Config change with redaction
@@ -390,7 +390,7 @@ log.info(
 
 ## 14. Physical Interface Layer — General-Purpose (condensed)
 
-> §14 covers measurement instruments only. §17 extends to general physical interfaces. Tag every line with `[transport=xxx][addr=xxx]`.
+> Full-spec §14 covers measurement instruments only; full-spec §17 extends to general physical interfaces. Tag every line with `[transport=xxx][addr=xxx]`.
 
 | Layer | Tag | Address format |
 |-------|-----|----------------|
@@ -405,7 +405,7 @@ log.info(
 | Step/servo pulse | `transport=pulse` | `AXIS0@dir=DIR1,pul=PUL2` |
 | PWM | `transport=pwm` | `chip=0/channel=0@1kHz@50%` |
 
-**Atomic-operation granularity** (KEY rule — not in §14):
+**Atomic-operation granularity** (KEY rule — new in full-spec §17.4):
 
 | Frequency | Granularity |
 |-----------|-------------|
@@ -418,7 +418,7 @@ log.info(
 
 ## 15. FILE_IO — File & Storage I/O (condensed)
 
-> §4.4 only covers `close` failure. See **§18** for the full spec.
+> Full-spec §4.4 only covers `close` failure. See full-spec **§18** for the complete rules.
 
 ```python
 # Unified prefix
@@ -463,7 +463,7 @@ def atomic_write(path, data):
 | `except: pass` | `except Exception: logger.exception(...)` |
 | `logger.info("pwd=%s", pwd)` | `logger.info("user=%s auth=OK", user)` |
 | `logger.error("Permission denied")` | `logger.error("AUTHZ_DENIED \| user=%s \| resource=%s", uid, rid)` |
-| `for msg in can_bus: logger.info(...)` | child logger + periodic summary (§14) |
-| `data = open("big.bin","rb").read()` | chunked ≤ 64 MiB (§15) |
-| `open("/data/x.csv","w").write(...)` | `tmp + os.replace` (§15) |
-| `HEALTH \| rss=... cpu=...` (ML workload) | include `gpu=idx:util\|mem\|temp\|pwr` (§13) |
+| `for msg in can_bus: logger.info(...)` | child logger + periodic summary (§17.4) |
+| `data = open("big.bin","rb").read()` | chunked ≤ 64 MiB (§18.6) |
+| `open("/data/x.csv","w").write(...)` | `tmp + os.replace` (§18.4) |
+| `HEALTH \| rss=... cpu=...` (ML workload) | include `gpu=idx:util\|mem\|temp\|pwr` (§16.2) |
